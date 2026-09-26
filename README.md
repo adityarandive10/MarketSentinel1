@@ -1,184 +1,152 @@
-# MarketSentinel
+# MarketSentinel — Complete Integration Build (Developer A + Developer B)
 
-**AI-Powered Market Surveillance & Stock Research Assistant**
+MarketSentinel is an automated, real-time financial market surveillance, ML anomaly detection, and AI research intelligence system. This repository contains the complete contract-locked integration build for both **Developer A** and **Developer B**.
 
-MarketSentinel is a real-time financial intelligence platform built to help analysts detect, investigate, and understand unusual stock-market activity.
+---
 
-The platform continuously analyzes market signals such as price movements, trading volume, trade activity, buy/sell pressure, volatility, and cross-stock relationships to identify behavior that differs from normal market patterns.
+## 1. Master Ownership Matrix
 
-When an unusual event is detected, MarketSentinel combines statistical signals, machine-learning anomaly detection, cross-stock analysis, market context, and relevant public information to generate an explainable risk alert.
+| Service / Directory | Owner | Responsibilities | Output Contract |
+| :--- | :--- | :--- | :--- |
+| `services/ingestion/` | **Developer A** | Provider interface (`SimulatorProvider`, `LiveMarketProvider`) | `MarketTick` $\rightarrow$ `market.ticks` |
+| `services/features/` | **Developer A** | Rolling-window feature calculation engine | `FeatureSnapshot` $\rightarrow$ `market.features` |
+| `services/detectors/` | **Developer A** | 5 Statistical Anomaly Detectors (Price, Volume, Trade, Flow, Book) | `AnomalySignal` $\rightarrow$ `market.anomaly_signals` |
+| `services/research_ingest/` | **Developer A** | PyMuPDF parsing, sentence-transformers (`all-MiniLM-L6-v2`), pgvector | `ResearchDocument` $\rightarrow$ `research.documents` |
+| `apps/api/a_routes/` | **Developer A** | Market snapshot, history, and document search API | REST endpoints |
+| `services/cross_stock/` | **Developer B** | Cross-stock correlation, synchronized move detection | `CROSS_STOCK_SYNC` AnomalySignal |
+| `services/ml/` | **Developer B** | scikit-learn Isolation Forest unsupervised outlier detection | `ML_ISOLATION_FOREST` AnomalySignal |
+| `services/research_assistant/` | **Developer B** | AI Research Assistant, grounded RAG briefs, analyst Q&A | `ResearchBrief` $\rightarrow$ `research.briefs` |
+| `services/risk_alerts/` | **Developer B** | Signal consolidation, deduplication, cooldown, alert scoring | `Alert` $\rightarrow$ `alerts` |
+| `apps/api/b_routes/` | **Developer B** | Alerts, AI research briefs, Q&A, and case management APIs | REST endpoints |
+| `apps/web/` | **Developer B** | Next.js 15 + React + TypeScript + Apache ECharts + Tailwind UI | Analyst Dashboard (Port 3000) |
+| `services/simulation/` | **Shared** | Simulation engine (A owns engine / B owns scenario UI) | `POST /api/simulation/scenario` |
+| `packages/schemas/` | **Shared** | Contract-locked Pydantic schemas (`schema_version=1`) | Locked schemas |
 
-Its integrated **AI Stock Research Assistant** can retrieve permitted company filings, financial results, investor materials, and news, identify relevant information, extract financial facts, compare reporting periods, and generate source-backed research briefs with citations.
+---
 
-## What MarketSentinel Does
+## 2. Canonical Topics & Event Pipeline
 
-```text
-Market Data
-     ↓
-Data Normalization
-     ↓
-Feature Engineering
-     ↓
-Anomaly Detection
-     ↓
-Cross-Stock & Market Context
-     ↓
-ML Anomaly Detection
-     ↓
-Risk Scoring
-     ↓
-🚨 Alert
-     ↓
-AI Research Assistant
-     ↓
-Evidence & Citations
-     ↓
-Analyst Investigation
+```
+[ MarketDataProvider ] (SimulatorProvider | LiveMarketProvider)
+          │
+          ▼
+   [ MarketTick ] (schema_version=1, ISO-8601 UTC ending in Z)
+          │
+          ▼
+   [ market.ticks ]
+          │
+          ▼
+  [ FeatureService ] (Rolling windows in memory / TimescaleDB)
+          │
+          ▼
+ [ FeatureSnapshot ] (13 locked metrics)
+          │
+          ▼
+  [ market.features ]
+          │
+          ├─────────────────────────┬─────────────────────────┐
+          ▼                         ▼                         ▼
+ [ 5 Statistical Detectors ] [ Cross-Stock Engine ]      [ ML Isolation Forest ]
+ (Price, Volume, Burst, Flow, Book) (Synchronized Moves)    (Unsupervised Outlier)
+          │                         │                         │
+          └─────────────────────────┼─────────────────────────┘
+                                    │
+                                    ▼
+                         [ AnomalySignal ] (0.0 - 1.0 scores)
+                                    │
+                                    ▼
+                        [ market.anomaly_signals ]
+                                    │
+                                    ▼
+                        [ Risk / Alert Engine ]
+                        (Weighted scoring, deduplication, cooldown)
+                                    │
+                                    ▼
+                            [ Alert (0-100) ]
+                                    │
+                        ┌───────────┴───────────┐
+                        ▼                       ▼
+            [ alerts (Redpanda) ]        [ AI Research Assistant ]
+                        │               (Retrieves filings, generates brief)
+                        ▼                       │
+            [ WebSocket: /ws/alerts ]           ▼
+                        │               [ ResearchBrief (Citations) ]
+                        ▼                       │
+            [ Next.js Analyst UI ] ◄────────────┘
 ```
 
-### Core Features
+---
 
-* 📊 **Real-Time Market Surveillance**
+## 3. The Signal & Risk Scoring Weights (Developer B)
 
-  * Monitors price, volume, trade activity, buy/sell pressure, volatility, and market context.
+The Risk/Alert Engine calculates the composite alert score using locked weights:
+- **Price (Z-Score & CUSUM)**: `0.20`
+- **Volume (Z-Score & Relative Volume)**: `0.20`
+- **Trade Activity (Trade Rate & Burst)**: `0.15`
+- **Order Flow (Imbalance & Book Anomaly)**: `0.15`
+- **Cross-Stock Correlation (Synchronized Moves)**: `0.10`
+- **Research / News Context**: `0.10`
+- **ML Isolation Forest**: `0.10`
 
-* 🚨 **Anomaly Detection**
+$$BaseScore = \sum (weight \times signal\_0\_1) \times 100$$
+- **Concurrence Boost**: $+10$ when 3 or more distinct detector categories trigger simultaneously.
+- **Alert Severity**:
+  - `0–30`: **NORMAL**
+  - `31–50`: **WATCH**
+  - `51–70`: **SUSPICIOUS**
+  - `71–85`: **HIGH**
+  - `86–100`: **CRITICAL**
 
-  * Detects unusual price movements, volume spikes, trade bursts, and abnormal market behavior.
+---
 
-* 🤖 **ML-Based Detection**
+## 4. API Endpoints Reference
 
-  * Uses machine-learning models such as Isolation Forest to identify behavior that differs from representative normal patterns.
+| Method | Endpoint | Owner | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | **Shared** | Health status of Developer A & B services |
+| `GET` | `/api/stocks/{symbol}/snapshot` | **Dev A** | Latest 13-metric FeatureSnapshot |
+| `GET` | `/api/stocks/{symbol}/history` | **Dev A** | Historical ticks and prices |
+| `GET` | `/api/research/documents` | **Dev A** | List indexed regulatory filings |
+| `GET` | `/api/research/search` | **Dev A** | Vector similarity search returning citation metadata |
+| `POST` | `/api/simulation/scenario` | **Shared** | Trigger simulator scenarios (A engine / B UI) |
+| `WS` | `/ws/market` | **Shared** | Real-time market tick and feature stream |
+| `GET` | `/api/alerts` | **Dev B** | List consolidated alerts (filter by symbol, severity, status) |
+| `GET` | `/api/alerts/{alert_id}` | **Dev B** | Get alert details and contributing signals |
+| `POST` | `/api/alerts/{alert_id}/status` | **Dev B** | Update alert status (`OPEN`, `INVESTIGATING`, `RESOLVED`, `CLOSED`) |
+| `POST` | `/api/research/brief` | **Dev B** | Generate grounded AI ResearchBrief with page citations |
+| `POST` | `/api/research/ask` | **Dev B** | Grounded analyst Q&A on verified disclosures |
+| `POST` | `/api/cases` | **Dev B** | Create investigation case linked to alert |
+| `GET` | `/api/cases/{case_id}` | **Dev B** | Retrieve case with full audit trail and notes |
+| `POST` | `/api/cases/{case_id}/notes` | **Dev B** | Add analyst note to case |
+| `WS` | `/ws/alerts` | **Dev B** | Real-time WebSocket alert broadcasting |
 
-* 🔗 **Cross-Stock Intelligence**
+---
 
-  * Detects synchronized movements between multiple stocks and determines whether an event appears stock-specific, sector-wide, or market-wide.
+## 5. Quickstart & Verification
 
-* 🧠 **AI Stock Research Assistant**
+### Run with Docker Compose
+```bash
+# Clean state startup
+docker compose down -v
+docker compose up --build -d
 
-  * Searches relevant filings, financial results, investor materials, and news.
-  * Summarizes important developments.
-  * Extracts financial metrics and relevant facts.
-  * Answers analyst questions using retrieved sources.
-
-* 📚 **RAG-Based Financial Research**
-
-  * Uses embeddings and vector search to retrieve relevant document sections before generating AI responses.
-
-* 📝 **Citation-First Research**
-
-  * Important claims are linked to their underlying document, article, page, section, or retrieved source whenever available.
-
-* 📈 **Risk & Alert Engine**
-
-  * Combines multiple signals into a configurable risk score and generates investigation alerts.
-
-* ⚡ **Real-Time Dashboard**
-
-  * Provides live market updates and alerts through WebSockets.
-
-* 🔎 **Analyst Investigation Workspace**
-
-  * Combines market evidence, anomaly signals, research findings, sources, notes, and case status in one interface.
-
-* 📂 **Case Management**
-
-  * Allows analysts to create cases, add notes, track investigation status, and record resolutions.
-
-## Technology Stack
-
-### Frontend
-
-* Next.js
-* React
-* TypeScript
-* Tailwind CSS
-* shadcn/ui
-* Apache ECharts / Lightweight Charts
-
-### Backend
-
-* Python
-* FastAPI
-* WebSockets
-
-### Data & Infrastructure
-
-* PostgreSQL
-* TimescaleDB
-* Redis
-* Kafka / Redpanda
-* Docker & Docker Compose
-
-### Machine Learning & AI
-
-* scikit-learn
-* Isolation Forest
-* sentence-transformers
-* pgvector
-* Optional FinBERT
-* Provider-agnostic LLM API
-* Retrieval-Augmented Generation (RAG)
-
-### Document Processing
-
-* PyMuPDF
-* pdfplumber
-* Unstructured
-
-### Testing
-
-* Pytest
-* Playwright
-
-## Responsible AI
-
-MarketSentinel is designed as an **analyst-assistance and investigation platform**, not an automatic trading or investment-advice system.
-
-Anomaly scores indicate unusual behavior that may require investigation; they are not proof of market manipulation.
-
-The research assistant is designed to:
-
-* Cite retrieved sources.
-* Distinguish extracted facts from generated interpretation.
-* Avoid fabricating financial figures or events.
-* Clearly indicate when relevant information cannot be found in configured sources.
-* Keep the human analyst responsible for the final investigation and conclusion.
-
-## Project Goal
-
-The goal of MarketSentinel is to reduce the time analysts spend manually monitoring markets and searching through large volumes of financial information.
-
-Instead of:
-
-```text
-Watch hundreds of stocks
-        ↓
-Notice unusual movement
-        ↓
-Search news manually
-        ↓
-Read filings
-        ↓
-Compare financial results
-        ↓
-Analyze related stocks
-        ↓
-Create investigation notes
+# Verify all services
+curl http://localhost:8000/health
 ```
 
-MarketSentinel provides:
-
-```text
-Detect
-  ↓
-Contextualize
-  ↓
-Research
-  ↓
-Explain
-  ↓
-Investigate
+### Run Full Test Suite (42 Tests: Unit, Contract, and E2E)
+```bash
+python -m pytest -v
 ```
 
-The platform brings market surveillance, machine learning, financial document intelligence, and AI-assisted research together in a single analyst workspace.
+### Run Demonstration Scripts
+```bash
+# Developer A Demonstration (Simulator -> Ticks -> Features -> 5 Detectors -> Ingestion)
+python scripts/demonstrate_pipeline.py
+
+# Developer B Demonstration (Cross-stock -> ML -> Risk Engine -> AI Research Brief -> Cases)
+python scripts/demonstrate_developer_b_pipeline.py
+
+# Live Docker Verification
+python scripts/verify_docker_scenarios.py
+```

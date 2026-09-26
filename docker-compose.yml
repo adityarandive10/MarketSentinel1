@@ -1,0 +1,114 @@
+name: marketsentinel
+
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg16
+    container_name: marketsentinel-postgres
+    environment:
+      POSTGRES_USER: marketsentinel
+      POSTGRES_PASSWORD: marketsentinel
+      POSTGRES_DB: marketsentinel
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketsentinel -d marketsentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: marketsentinel-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.2
+    container_name: marketsentinel-redpanda
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 1G
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr localhost:8082
+    ports:
+      - "9092:9092"
+      - "19092:19092"
+      - "8082:8082"
+      - "9644:9644"
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true' || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: marketsentinel-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://marketsentinel:marketsentinel@postgres:5432/marketsentinel
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BROKERS=redpanda:9092
+      - API_BASE_URL=http://api:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+      - MARKET_DATA_PROVIDER=simulator
+      - MARKET_DATA_API_KEY=
+      - MARKET_DATA_API_SECRET=
+      - MARKET_DATA_BASE_URL=
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      - EMBEDDING_DIM=384
+      - SIM_SYMBOLS=TCS,INFY,RELIANCE,HDFCBANK,ICICIBANK,SBIN,ITC,LT,BHARTIARTL,TATAMOTORS
+      - SIM_SCENARIO=NORMAL
+      - SIM_SCENARIO_INTERVAL_SECONDS=30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  web:
+    build:
+      context: apps/web
+      dockerfile: Dockerfile
+    container_name: marketsentinel-web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
+  redpandadata:
